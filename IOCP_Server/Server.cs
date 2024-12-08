@@ -1,10 +1,12 @@
 ﻿using System.Buffers;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 
 namespace IOCP_Server
 {
-    public class Server
+    public class Server : IDisposable
     {
         private int _port;
         private SocketAsyncEventArgsPool _readWritePool;
@@ -12,13 +14,25 @@ namespace IOCP_Server
         private int _connectionSize;
         private Semaphore _acceptClients;
         private Socket _listenSocket;
+        private bool disposedFlag;
+
         public Server(int port,int ConnectionSize)
         {
             _connectionSize = ConnectionSize;
             _port = port;
             _readWritePool = new SocketAsyncEventArgsPool(_connectionSize);
             _acceptClients = new Semaphore(_connectionSize, ConnectionSize);
+            _listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             init();
+        }
+
+        public static void Main()
+        {
+            using Server server = new Server(34543,30);
+            server.Run();
+
+            Console.WriteLine("server working...");
+            Console.ReadKey();
         }
 
         public void init()
@@ -28,23 +42,21 @@ namespace IOCP_Server
             {
                 socketEventArgs = new SocketAsyncEventArgs();
                 socketEventArgs.Completed += ComplateIO;
+                socketEventArgs.SetBuffer(new byte[1024]);
                 _readWritePool.Push(socketEventArgs);
             }
         }
 
         public void Run()
         {
-            _listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            IPEndPoint endPoint = new IPEndPoint(IPAddress.Any, _port);
-            _listenSocket.Bind(endPoint);
+            _listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
             _listenSocket.Listen(10);
             SocketAsyncEventArgs acceptEventArgs = new SocketAsyncEventArgs();
             acceptEventArgs.Completed += Aceept_Completed;
             RunningSocket(acceptEventArgs);
-            CloseClientSocket(acceptEventArgs);
         }
 
-        public void RunningSocket(SocketAsyncEventArgs args)
+        private void RunningSocket(SocketAsyncEventArgs args)
         {
             bool someEvent = false;
             while (!someEvent)
@@ -57,13 +69,18 @@ namespace IOCP_Server
                     Accept_Start(args);
                 }
             }
+
         }
 
         private void Accept_Start(SocketAsyncEventArgs e)
         {
+            Console.WriteLine("accept start");
+            if(e.SocketError != SocketError.Success)
+            {
+                Console.WriteLine(e.SocketError);
+            }
             SocketAsyncEventArgs args = _readWritePool.Pop();
-            args.UserToken = e.UserToken;
-
+            args.UserToken = e.AcceptSocket;
             bool someEvent = e.AcceptSocket.ReceiveAsync(args);
             if (!someEvent)
             {
@@ -73,26 +90,40 @@ namespace IOCP_Server
 
         private void ComplateIO(object? sender, SocketAsyncEventArgs e)
         {
-
+            switch (e.LastOperation)
+            {
+                case SocketAsyncOperation.Receive:
+                    StartReceive(e);
+                    break;
+                case SocketAsyncOperation.Send:
+                    StartSend(e);
+                    break;
+            }
         }
 
         private void Aceept_Completed(object? sender, SocketAsyncEventArgs e)
         {
             Accept_Start(e);
-
+            //추가적인 요청 기다림
             RunningSocket(e);
         }
         private void StartReceive(SocketAsyncEventArgs e)
         {
             if(e.BytesTransferred == 0 || e.SocketError != SocketError.Success)
             {
+                Console.WriteLine("receive close");
                 CloseClientSocket(e);
                 return;
             }
-            byte[] data = new byte[e.BytesTransferred];
-            Console.WriteLine(data);
-            e.SetBuffer(data);
-
+            /*byte[] data = e.Buffer;
+            e.SetBuffer(data);*/
+            Socket socket = (Socket)e.UserToken;
+            //Console.WriteLine(e.Buffer);
+            Console.WriteLine(Encoding.UTF8.GetString(e.Buffer));
+            if (!socket.SendAsync(e))
+            {
+                StartSend(e);
+            }
         }
 
         /// <summary>
@@ -101,7 +132,7 @@ namespace IOCP_Server
         /// <param name="e"></param>
         private void StartSend(SocketAsyncEventArgs e)
         {
-            if(e.SocketError != SocketError.Success)
+            if(e.SocketError != SocketError.Success || e.UserToken==null)
             {
                 CloseClientSocket(e);
                 return;
@@ -117,16 +148,42 @@ namespace IOCP_Server
 
         private void CloseClientSocket(SocketAsyncEventArgs e)
         {
-            Socket socket = (Socket)e.UserToken;
-
-            try
+            if (e.UserToken != null)
             {
-                socket.Shutdown(SocketShutdown.Send);
+                Socket socket = (Socket)e.UserToken;
+                try
+                {
+                    socket.Shutdown(SocketShutdown.Send);
+                }
+                catch { };
+                socket.Close();
             }
-            catch{ };
-            socket.Close();
             _readWritePool.Push(e);
             _acceptClients.Release();
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!disposedFlag)
+            {
+                if (disposing)
+                {
+                    try
+                    {
+                        _listenSocket.Shutdown(SocketShutdown.Send);
+                    }
+                    catch (Exception e) { Debug.WriteLine($"{e} \n {e.StackTrace}"); };
+                    _listenSocket.Close();
+                }
+                disposedFlag = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            // 이 코드를 변경하지 마세요. 'Dispose(bool disposing)' 메서드에 정리 코드를 입력합니다.
+            Dispose(disposing: true);
+            GC.SuppressFinalize(this);
         }
     }
 }
