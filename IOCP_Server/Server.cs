@@ -8,13 +8,24 @@ namespace IOCP_Server
 {
     public class Server : IDisposable
     {
+
+        /*
+         SocketAsyncEventArgs를 이용한 xxxAsync 는
+        비동기적으로 완료된 경우 true, 동기적으로 완료될 경우 false를 보내며,
+        그 결과를 매개변수 SocketAsyncEventArgs에 기록한다.
+         
+         
+         
+         */
+
+
         private int _port;
         private SocketAsyncEventArgsPool _readWritePool;
 
         private int _connectionSize;
         private Semaphore _acceptClients;
         private Socket _listenSocket;
-        private bool disposedFlag;
+        private bool disposedFlag=false;
 
         public Server(int port,int ConnectionSize)
         {
@@ -30,8 +41,7 @@ namespace IOCP_Server
         {
             using Server server = new Server(34543,30);
             server.Run();
-
-            Console.WriteLine("server working...");
+            Console.WriteLine("server working... press any key to close server");
             Console.ReadKey();
         }
 
@@ -42,7 +52,7 @@ namespace IOCP_Server
             {
                 socketEventArgs = new SocketAsyncEventArgs();
                 socketEventArgs.Completed += ComplateIO;
-                socketEventArgs.SetBuffer(new byte[1024]);
+                socketEventArgs.SetBuffer(new byte[1024],0,1024);
                 _readWritePool.Push(socketEventArgs);
             }
         }
@@ -52,32 +62,54 @@ namespace IOCP_Server
             _listenSocket.Bind(new IPEndPoint(IPAddress.Any, _port));
             _listenSocket.Listen(10);
             SocketAsyncEventArgs acceptEventArgs = new SocketAsyncEventArgs();
-            acceptEventArgs.Completed += Aceept_Completed;
+            acceptEventArgs.Completed += RunningSocketEnd;
             RunningSocket(acceptEventArgs);
         }
 
+        /// <summary>
+        /// 동기적으로 처리시 다음 요청을 기다리고, 비동기적으로 처리 시 루프를 빠져나간다.
+        /// 
+        /// </summary>
+        /// <param name="args"></param>
         private void RunningSocket(SocketAsyncEventArgs args)
         {
             bool someEvent = false;
             while (!someEvent)
             {
                 _acceptClients.WaitOne();
+                if (disposedFlag)
+                {
+                    break;
+                }
                 args.AcceptSocket = null;
+                // 계속해서 새로운 thread에 일을 할당하지만, .net 자체적인 thread pool을 이용하기 떄문에
+                // 새로운 thread를 생성하지 않으므로 자원을 보다 효율적으로 사용한다.
                 someEvent = _listenSocket.AcceptAsync(args);
+                //만약 동기적으로 실행된다면, thread pool에 남은 thread가 없다는 뜻이므로
+                //현재 thread를 계속 활용한다.
                 if (!someEvent)
                 {
-                    Accept_Start(args);
+                    AcceptRequest(args);
                 }
             }
-
         }
 
-        private void Accept_Start(SocketAsyncEventArgs e)
+        private void RunningSocketEnd(object? sender, SocketAsyncEventArgs e)
         {
-            Console.WriteLine("accept start");
+            AcceptRequest(e);
+            //추가적인 요청 기다림
+            RunningSocket(e);
+        }
+
+        private void AcceptRequest(SocketAsyncEventArgs e)
+        {
             if(e.SocketError != SocketError.Success)
             {
-                Console.WriteLine(e.SocketError);
+                if (e.AcceptSocket != null)
+                {
+                    DisposeSocket(e.AcceptSocket);
+                }
+                return;
             }
             SocketAsyncEventArgs args = _readWritePool.Pop();
             args.UserToken = e.AcceptSocket;
@@ -93,6 +125,7 @@ namespace IOCP_Server
             switch (e.LastOperation)
             {
                 case SocketAsyncOperation.Receive:
+                    Console.WriteLine("async recivce");
                     StartReceive(e);
                     break;
                 case SocketAsyncOperation.Send:
@@ -101,25 +134,20 @@ namespace IOCP_Server
             }
         }
 
-        private void Aceept_Completed(object? sender, SocketAsyncEventArgs e)
-        {
-            Accept_Start(e);
-            //추가적인 요청 기다림
-            RunningSocket(e);
-        }
+
         private void StartReceive(SocketAsyncEventArgs e)
         {
+            Console.WriteLine("start recive");
             if(e.BytesTransferred == 0 || e.SocketError != SocketError.Success)
             {
-                Console.WriteLine("receive close");
-                CloseClientSocket(e);
+                Recycle(e);
                 return;
             }
-            /*byte[] data = e.Buffer;
-            e.SetBuffer(data);*/
             Socket socket = (Socket)e.UserToken;
-            //Console.WriteLine(e.Buffer);
-            Console.WriteLine(Encoding.UTF8.GetString(e.Buffer));
+            if (e.Buffer != null)
+            {
+                Console.WriteLine(Encoding.UTF8.GetString(e.Buffer, e.Offset, e.BytesTransferred));
+            }
             if (!socket.SendAsync(e))
             {
                 StartSend(e);
@@ -134,11 +162,12 @@ namespace IOCP_Server
         {
             if(e.SocketError != SocketError.Success || e.UserToken==null)
             {
-                CloseClientSocket(e);
+                Recycle(e);
                 return;
             }
             //Receive another data
             Socket socket = (Socket)e.UserToken;
+            Console.WriteLine("send to "+((IPEndPoint?)socket.RemoteEndPoint)?.Address);
             bool someEvent = socket.ReceiveAsync(e);
             if (!someEvent)
             {
@@ -146,20 +175,26 @@ namespace IOCP_Server
             }
         }
 
-        private void CloseClientSocket(SocketAsyncEventArgs e)
+        private void Recycle(SocketAsyncEventArgs e)
         {
             if (e.UserToken != null)
             {
-                Socket socket = (Socket)e.UserToken;
-                try
-                {
-                    socket.Shutdown(SocketShutdown.Send);
-                }
-                catch { };
-                socket.Close();
+                DisposeSocket((Socket)e.UserToken);
             }
             _readWritePool.Push(e);
             _acceptClients.Release();
+        }
+        private void DisposeSocket(Socket socket)
+        {
+            try
+            {
+                if (socket.Connected)
+                {
+                    _listenSocket.Shutdown(SocketShutdown.Both);
+                }
+            }
+            catch { }
+            socket.Close();
         }
 
         protected virtual void Dispose(bool disposing)
@@ -168,12 +203,7 @@ namespace IOCP_Server
             {
                 if (disposing)
                 {
-                    try
-                    {
-                        _listenSocket.Shutdown(SocketShutdown.Send);
-                    }
-                    catch (Exception e) { Debug.WriteLine($"{e} \n {e.StackTrace}"); };
-                    _listenSocket.Close();
+                    DisposeSocket(_listenSocket);
                 }
                 disposedFlag = true;
             }
