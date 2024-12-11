@@ -66,6 +66,13 @@ namespace IOCP_Server
             RunningSocket(acceptEventArgs);
         }
 
+        private void RunningSocketEnd(object? sender, SocketAsyncEventArgs e)
+        {
+            AcceptRequest(e);
+            //추가적인 요청 기다림
+            RunningSocket(e);
+        }
+
         /// <summary>
         /// 동기적으로 처리시 다음 요청을 기다리고, 비동기적으로 처리 시 루프를 빠져나간다.
         /// 
@@ -94,12 +101,7 @@ namespace IOCP_Server
             }
         }
 
-        private void RunningSocketEnd(object? sender, SocketAsyncEventArgs e)
-        {
-            AcceptRequest(e);
-            //추가적인 요청 기다림
-            RunningSocket(e);
-        }
+        
 
         private void AcceptRequest(SocketAsyncEventArgs e)
         {
@@ -124,10 +126,13 @@ namespace IOCP_Server
         {
             switch (e.LastOperation)
             {
+                case SocketAsyncOperation.Accept:
+                    AcceptRequest(e);
+                    break;
                 case SocketAsyncOperation.Receive:
-                    Console.WriteLine("async recivce");
                     StartReceive(e);
                     break;
+               
                 case SocketAsyncOperation.Send:
                     StartSend(e);
                     break;
@@ -148,6 +153,7 @@ namespace IOCP_Server
             {
                 Console.WriteLine(Encoding.UTF8.GetString(e.Buffer, e.Offset, e.BytesTransferred));
             }
+            Console.WriteLine("send to " + ((IPEndPoint?)socket.RemoteEndPoint)?.Address);
             if (!socket.SendAsync(e))
             {
                 StartSend(e);
@@ -167,7 +173,7 @@ namespace IOCP_Server
             }
             //Receive another data
             Socket socket = (Socket)e.UserToken;
-            Console.WriteLine("send to "+((IPEndPoint?)socket.RemoteEndPoint)?.Address);
+            Console.WriteLine($"Start Receive from {(socket.LocalEndPoint as IPEndPoint)?.Address}");
             bool someEvent = socket.ReceiveAsync(e);
             if (!someEvent)
             {
