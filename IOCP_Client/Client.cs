@@ -16,6 +16,7 @@ namespace IOCP_Client
 
         Socket _listenSocket;
         private bool disposedFlag;
+        private bool _oneSAEA = false;
 
         public Client()
         {
@@ -28,46 +29,35 @@ namespace IOCP_Client
             SocketAsyncEventArgs socketEventArgs = new SocketAsyncEventArgs();
             socketEventArgs.RemoteEndPoint = remoteEP;
             socketEventArgs.Completed+=ComplateIO;
-            StartConnect(socketEventArgs);
-            /* _listenSocket.Connect(remoteEP);
-             _listenSocket.Send(Encoding.UTF8.GetBytes("test"));
-             byte[] tes= new byte[100];
-             _listenSocket.Receive(tes);
-             Console.WriteLine(Encoding.UTF8.GetString(tes));*/
-            //RunningSocket(socketEventArgs);
+            RunningSocketOneSAEA(socketEventArgs);
             Console.WriteLine("Client working... press any key to close Client");
             Console.ReadKey();
             socketEventArgs.Dispose();
             Dispose();
         }
+
+        // TODO : Need more Implementing
         private void RunningSocket(SocketAsyncEventArgs args)
         {
             bool someEvent = false;
             while (!someEvent)
             {
                 args.AcceptSocket = null;
-                someEvent = _listenSocket.ConnectAsync(args);
-                if (!someEvent)
+                if (!_listenSocket.ConnectAsync(args))
                 {
-                    StartConnect(args);
+                    StartSend(args);
                 }
             }
         }
 
-        private void StartConnect(SocketAsyncEventArgs e)
+        private void RunningSocketOneSAEA(SocketAsyncEventArgs args)
         {
-            if (e.AcceptSocket == null)
+            _oneSAEA = true;
+            if (!_listenSocket.ConnectAsync(args))
             {
-                return;
+                StartSend(args);
             }
-            SocketAsyncEventArgs ske = new SocketAsyncEventArgs();
-            ske.UserToken = e.AcceptSocket;
-            bool someEvent = e.AcceptSocket.ReceiveAsync(ske);
-            if (!someEvent)
-            {
-                StartReceive(ske);
             }
-        }
 
         private void ComplateIO(object? sender, SocketAsyncEventArgs e)
         {
@@ -75,14 +65,13 @@ namespace IOCP_Client
             switch (e.LastOperation)
             {
                 case SocketAsyncOperation.Connect:
-                    StartConnect(e);
+                    StartSend(e);
                     break;
                 case SocketAsyncOperation.Receive:
-               
-                    StartReceive(e);
+                    EndReceive(e);
                     break;
                 case SocketAsyncOperation.Send:
-                    StartSend(e);
+                    StartReceive(e);
                     break;
             }
         }
@@ -94,10 +83,10 @@ namespace IOCP_Client
                 Recycle(e);
                 return;
             }
+            Console.WriteLine($"socket send to {(e.RemoteEndPoint as IPEndPoint)?.Address}");
             byte[] data = Encoding.UTF8.GetBytes("test");
-            SocketAsyncEventArgs events = new SocketAsyncEventArgs();
-            events.SetBuffer(data);
-            bool someEvent = _listenSocket.SendAsync(events);
+            e.SetBuffer(data,0,data.Length);
+            bool someEvent = e.ConnectSocket.SendAsync(e);
             if (!someEvent)
             {
                 StartReceive(e);
@@ -106,23 +95,32 @@ namespace IOCP_Client
 
         private void StartReceive(SocketAsyncEventArgs e)
         {
+            if (!e.ConnectSocket.ReceiveAsync(e))
+            {
+                EndReceive(e);
+            }
+        }
+
+        private void EndReceive(SocketAsyncEventArgs e)
+        {
             if (e.BytesTransferred == 0 || e.SocketError != SocketError.Success)
             {
                 Recycle(e);
                 return;
             }
-            Socket socket = (Socket)e.UserToken;
             Console.WriteLine(Encoding.UTF8.GetString(e.Buffer));
-            Recycle(e);
         }
 
         
-
         private void Recycle(SocketAsyncEventArgs e)
         {
             if (e.UserToken != null)
             {
                 DisposeSocket((Socket)e.UserToken);
+            }
+            if (!_oneSAEA)
+            {
+                _acessLimit.Release();
             }
         }
         private void DisposeSocket(Socket socket)
