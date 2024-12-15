@@ -6,8 +6,7 @@
     {
         static void Main(string[] args)
         {
-            Server server = new Server(34543);
-            server.Run();
+
         }
     }
 }
