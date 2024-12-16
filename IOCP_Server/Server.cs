@@ -63,14 +63,15 @@ namespace IOCP_Server
             _listenSocket.Listen(10);
             SocketAsyncEventArgs acceptEventArgs = new SocketAsyncEventArgs();
             acceptEventArgs.Completed += RunningSocketEnd;
-            RunningSocket(acceptEventArgs);
+            WaitingAccept(acceptEventArgs);
         }
 
         private void RunningSocketEnd(object? sender, SocketAsyncEventArgs e)
         {
+            //받은 요청을 처리함.
             AcceptRequest(e);
             //추가적인 요청 기다림
-            RunningSocket(e);
+            WaitingAccept(e);
         }
 
         /// <summary>
@@ -78,7 +79,7 @@ namespace IOCP_Server
         /// 
         /// </summary>
         /// <param name="args"></param>
-        private void RunningSocket(SocketAsyncEventArgs args)
+        private void WaitingAccept(SocketAsyncEventArgs args)
         {
             bool someEvent = false;
             while (!someEvent)
@@ -105,16 +106,18 @@ namespace IOCP_Server
 
         private void AcceptRequest(SocketAsyncEventArgs e)
         {
-            if(e.SocketError != SocketError.Success)
+            if(e.SocketError != SocketError.Success || e.AcceptSocket == null)
             {
                 if (e.AcceptSocket != null)
                 {
                     DisposeSocket(e.AcceptSocket);
                 }
+                Recycle(e);
                 return;
             }
             SocketAsyncEventArgs args = _readWritePool.Pop();
             args.UserToken = e.AcceptSocket;
+            Console.WriteLine("Start Receive");
             bool someEvent = e.AcceptSocket.ReceiveAsync(args);
             if (!someEvent)
             {
@@ -130,55 +133,60 @@ namespace IOCP_Server
                     AcceptRequest(e);
                     break;
                 case SocketAsyncOperation.Receive:
-                    StartReceive(e);
+                    EndReceive(e);
                     break;
-               
                 case SocketAsyncOperation.Send:
-                    StartSend(e);
+                    EndSend(e);
                     break;
             }
         }
 
-
-        private void StartReceive(SocketAsyncEventArgs e)
+        private void StartReceive(SocketAsyncEventArgs data)
         {
-            Console.WriteLine("start recive");
-            if(e.BytesTransferred == 0 || e.SocketError != SocketError.Success)
+            if(data.UserToken == null)
             {
-                Recycle(e);
+                Recycle(data);
                 return;
             }
-            Socket socket = (Socket)e.UserToken;
-            if (e.Buffer != null)
+            Socket socket = (Socket)data.UserToken;
+            if (!socket.ReceiveAsync(data))
             {
-                Console.WriteLine(Encoding.UTF8.GetString(e.Buffer, e.Offset, e.BytesTransferred));
-            }
-            Console.WriteLine("send to " + ((IPEndPoint?)socket.RemoteEndPoint)?.Address);
-            if (!socket.SendAsync(e))
-            {
-                StartSend(e);
+                EndReceive(data);
             }
         }
-
-        /// <summary>
-        /// 
-        /// </summary>
-        /// <param name="e"></param>
-        private void StartSend(SocketAsyncEventArgs e)
+        private void EndReceive(SocketAsyncEventArgs data)
         {
-            if(e.SocketError != SocketError.Success || e.UserToken==null)
+            if (data.BytesTransferred == 0 || data.SocketError != SocketError.Success || data.Buffer==null)
             {
-                Recycle(e);
+                Recycle(data);
                 return;
             }
-            //Receive another data
-            Socket socket = (Socket)e.UserToken;
-            Console.WriteLine($"Start Receive from {(socket.LocalEndPoint as IPEndPoint)?.Address}");
-            bool someEvent = socket.ReceiveAsync(e);
-            if (!someEvent)
+            string reciveData = Encoding.UTF8.GetString(data.Buffer, 0, data.BytesTransferred);
+            Console.WriteLine($"recive data :{reciveData}");
+            //debug
+            StartSend(data);
+        }
+        private void StartSend(SocketAsyncEventArgs data)
+        {
+            if (data.SocketError != SocketError.Success || data.UserToken==null)
             {
-                StartReceive(e);
+                Recycle(data);
+                return;
             }
+            Socket AccepteSocket = (Socket)data.UserToken;
+            //echo
+            data.SetBuffer(data.Buffer,0 , data.BytesTransferred);
+            Console.WriteLine("send to " + ((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address);
+            if (!AccepteSocket.SendAsync(data))
+            {
+                EndSend(data);
+            }
+            
+        }
+        private void EndSend(SocketAsyncEventArgs data)
+        {
+            //더 보낼 데이터가 없다면
+            StartReceive(data);
         }
 
         private void Recycle(SocketAsyncEventArgs e)
