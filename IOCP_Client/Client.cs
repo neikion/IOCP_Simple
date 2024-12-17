@@ -1,8 +1,6 @@
-﻿using System.Diagnostics;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace IOCP_Client
 {
@@ -14,88 +12,98 @@ namespace IOCP_Client
             client.Run();
         }
 
-        Socket _listenSocket;
+        private Socket connectSocket;
         private bool disposedFlag;
-        private bool _oneSAEA = false;
-
+        SocketAsyncEventArgs socketEventArgs = new SocketAsyncEventArgs();
         public Client()
         {
-            _listenSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            connectSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            IPEndPoint remoteEP = new IPEndPoint(IPAddress.Loopback, 34543);
+            socketEventArgs.RemoteEndPoint = remoteEP;
+            socketEventArgs.Completed += ComplateIO;
         }
 
         public void Run()
         {
-            IPEndPoint remoteEP = new IPEndPoint(IPAddress.Loopback, 34543);
-            SocketAsyncEventArgs socketEventArgs = new SocketAsyncEventArgs();
-            socketEventArgs.RemoteEndPoint = remoteEP;
-            socketEventArgs.Completed+=ComplateIO;
-            RunningSocketOneSAEA(socketEventArgs);
+            StartConnectOneSAEA(socketEventArgs);
             Console.WriteLine("Client working... press any key to close Client");
             Console.ReadKey();
-            socketEventArgs.Dispose();
-            Dispose();
+            Recycle(socketEventArgs);
         }
 
-        // TODO : Need more Implementing
-        private void RunningSocket(SocketAsyncEventArgs args)
+        private void StartConnectOneSAEA(SocketAsyncEventArgs e)
         {
-            bool someEvent = false;
-            while (!someEvent)
+            if (!connectSocket.ConnectAsync(e))
             {
-                args.AcceptSocket = null;
-                if (!_listenSocket.ConnectAsync(args))
-                {
-                    StartSend(args);
-                }
+                EndConnect(e);
             }
         }
-
-        private void RunningSocketOneSAEA(SocketAsyncEventArgs args)
-        {
-            _oneSAEA = true;
-            if (!_listenSocket.ConnectAsync(args))
-            {
-                StartSend(args);
-            }
-            }
 
         private void ComplateIO(object? sender, SocketAsyncEventArgs e)
         {
-            //Console.WriteLine(e.SocketError);
+            Console.WriteLine(e.SocketError);
             switch (e.LastOperation)
             {
                 case SocketAsyncOperation.Connect:
-                    StartSend(e);
+                    EndConnect(e);
                     break;
                 case SocketAsyncOperation.Receive:
                     EndReceive(e);
                     break;
                 case SocketAsyncOperation.Send:
-                    StartReceive(e);
+                    EndSend(e);
                     break;
             }
         }
-        private void StartSend(SocketAsyncEventArgs e)
+
+        private void EndConnect(SocketAsyncEventArgs e)
         {
-            Console.WriteLine($"socket send to {(e.RemoteEndPoint as IPEndPoint)?.Address}");
             if (e.SocketError != SocketError.Success)
             {
+                Console.WriteLine($"error {e.SocketError}");
                 Recycle(e);
                 return;
             }
-            Console.WriteLine($"socket send to {(e.RemoteEndPoint as IPEndPoint)?.Address}");
-            byte[] data = Encoding.UTF8.GetBytes("test");
-            e.SetBuffer(data,0,data.Length);
-            bool someEvent = e.ConnectSocket.SendAsync(e);
-            if (!someEvent)
+            e.UserToken = e.ConnectSocket;
+            StartSend(e);
+        }
+
+        private void StartSend(SocketAsyncEventArgs e)
+        {
+            if (e.SocketError != SocketError.Success || e.UserToken == null)
             {
-                StartReceive(e);
+                Console.WriteLine($"error {e.SocketError}");
+                Recycle(e);
+                return;
             }
+            Socket ConnectSocket = (Socket)e.UserToken;
+            Console.WriteLine($"socket send to {(ConnectSocket.RemoteEndPoint as IPEndPoint)?.Address}");
+            byte[] data = Encoding.UTF8.GetBytes("test");
+            e.SetBuffer(data, 0, data.Length);
+            if (!ConnectSocket.SendAsync(e))
+            {
+                EndSend(e);
+            }
+        }
+
+        private void EndSend(SocketAsyncEventArgs e)
+        {
+            StartReceive(e);
         }
 
         private void StartReceive(SocketAsyncEventArgs e)
         {
-            if (!e.ConnectSocket.ReceiveAsync(e))
+            if (e.UserToken == null)
+            {
+                Console.WriteLine("Connected Socket Missing");
+                Recycle(e);
+                return;
+            }
+            Console.WriteLine($"Start receive ");
+            Socket ConnectSocket = (Socket)e.UserToken;
+            byte[] data = new byte[1024];
+            e.SetBuffer(data, 0, data.Length);
+            if (!ConnectSocket.ReceiveAsync(e))
             {
                 EndReceive(e);
             }
@@ -105,22 +113,18 @@ namespace IOCP_Client
         {
             if (e.BytesTransferred == 0 || e.SocketError != SocketError.Success)
             {
-                Recycle(e);
+                Console.WriteLine($"Error {e.SocketError}");
                 return;
             }
-            Console.WriteLine(Encoding.UTF8.GetString(e.Buffer));
+            Console.WriteLine("recieve data : " + Encoding.UTF8.GetString(e.Buffer));
         }
-
         
+
         private void Recycle(SocketAsyncEventArgs e)
         {
             if (e.UserToken != null)
             {
                 DisposeSocket((Socket)e.UserToken);
-            }
-            if (!_oneSAEA)
-            {
-                _acessLimit.Release();
             }
         }
         private void DisposeSocket(Socket socket)
@@ -129,7 +133,7 @@ namespace IOCP_Client
             {
                 if (socket.Connected)
                 {
-                    _listenSocket.Shutdown(SocketShutdown.Both);
+                    connectSocket.Shutdown(SocketShutdown.Both);
                 }
             }
             catch { }
@@ -142,7 +146,7 @@ namespace IOCP_Client
             {
                 if (disposing)
                 {
-                    DisposeSocket(_listenSocket);
+                    DisposeSocket(connectSocket);
                 }
                 
                 // TODO: 비관리형 리소스(비관리형 개체)를 해제하고 종료자를 재정의합니다.
