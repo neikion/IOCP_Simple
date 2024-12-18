@@ -26,8 +26,10 @@ namespace IOCP_Client
         public void Run()
         {
             StartConnectOneSAEA(socketEventArgs);
+            /*
             Console.WriteLine("Client working... press any key to close Client");
             Console.ReadKey();
+            */
             Recycle(socketEventArgs);
         }
 

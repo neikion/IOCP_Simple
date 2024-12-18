@@ -176,7 +176,8 @@ namespace IOCP_Server
             Socket AccepteSocket = (Socket)data.UserToken;
             //echo
             data.SetBuffer(data.Buffer,0 , data.BytesTransferred);
-            Console.WriteLine("send to " + ((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address);
+
+            Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()}");
             if (!AccepteSocket.SendAsync(data))
             {
                 EndSend(data);
