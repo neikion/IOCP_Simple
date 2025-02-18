@@ -52,7 +52,7 @@ namespace IOCP_Server
             {
                 socketEventArgs = new SocketAsyncEventArgs();
                 socketEventArgs.Completed += ComplateIO;
-                socketEventArgs.SetBuffer(new byte[1024],0,1024);
+                socketEventArgs.SetBuffer(new byte[4096], 0,4096);
                 _readWritePool.Push(socketEventArgs);
             }
         }
@@ -115,15 +115,11 @@ namespace IOCP_Server
                 Recycle(e);
                 return;
             }
+            //e는 새로운 WaitingAccept을 위해 닫지 않는다.
             SocketAsyncEventArgs args = _readWritePool.Pop();
             args.UserToken = e.AcceptSocket;
-            Console.WriteLine("Start Receive");
-            bool someEvent = e.AcceptSocket.ReceiveAsync(args);
-            if (!someEvent)
-            {
                 StartReceive(args);
             }
-        }
 
         private void ComplateIO(object? sender, SocketAsyncEventArgs e)
         {
@@ -162,8 +158,9 @@ namespace IOCP_Server
                 return;
             }
             string reciveData = Encoding.UTF8.GetString(data.Buffer, 0, data.BytesTransferred);
-            Console.WriteLine($"recive data :{reciveData}");
-            //debug
+#if !BENCHMARK
+            Console.WriteLine($"recive data from {((IPEndPoint?)data.RemoteEndPoint)?.Address.ToString()}:{reciveData}");
+#endif
             StartSend(data);
         }
         private void StartSend(SocketAsyncEventArgs data)
@@ -174,10 +171,12 @@ namespace IOCP_Server
                 return;
             }
             Socket AccepteSocket = (Socket)data.UserToken;
-            //echo
-            data.SetBuffer(data.Buffer,0 , data.BytesTransferred);
-
+            //response for request
+            byte[] senddata = Encoding.UTF8.GetBytes("Recive ok");
+            data.SetBuffer(senddata, 0, senddata.Length);
+#if !BENCHMARK
             Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()}");
+#endif
             if (!AccepteSocket.SendAsync(data))
             {
                 EndSend(data);
@@ -186,8 +185,13 @@ namespace IOCP_Server
         }
         private void EndSend(SocketAsyncEventArgs data)
         {
+#if RELEASE || DEBUG
             //더 보낼 데이터가 없다면
             StartReceive(data);
+#elif BENCHMARK
+            //jmeter 테스트를 위함
+            Recycle(data);
+#endif
         }
 
         private void Recycle(SocketAsyncEventArgs e)
@@ -205,7 +209,7 @@ namespace IOCP_Server
             {
                 if (socket.Connected)
                 {
-                    _listenSocket.Shutdown(SocketShutdown.Both);
+                    socket.Shutdown(SocketShutdown.Both);
                 }
             }
             catch { }
