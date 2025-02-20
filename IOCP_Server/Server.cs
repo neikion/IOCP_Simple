@@ -145,6 +145,7 @@ namespace IOCP_Server
                 return;
             }
             Socket socket = (Socket)data.UserToken;
+            data.SetBuffer(data.Buffer, 0, data.Buffer.Length);
             if (!socket.ReceiveAsync(data))
             {
                 EndReceive(data);
@@ -152,15 +153,24 @@ namespace IOCP_Server
         }
         private void EndReceive(SocketAsyncEventArgs data)
         {
-            if (data.BytesTransferred == 0 || data.SocketError != SocketError.Success || data.Buffer==null)
+            if (data.SocketError != SocketError.Success || data.Buffer==null)
             {
                 Recycle(data);
                 return;
             }
+            if (data.BytesTransferred > 0)
+            {
             string reciveData = Encoding.UTF8.GetString(data.Buffer, 0, data.BytesTransferred);
 #if !BENCHMARK
-            Console.WriteLine($"recive data from {((IPEndPoint?)data.RemoteEndPoint)?.Address.ToString()}:{reciveData}");
+                IPEndPoint? endPoint= (IPEndPoint?)((Socket)data.UserToken).RemoteEndPoint;
+                Console.WriteLine($"recive data from {endPoint?.Address.ToString()}:{endPoint?.Port}   :  {reciveData}");
 #endif
+                if (data.BytesTransferred == data.Buffer.Length)
+                {
+                    StartReceive(data);
+                    return;
+                }
+            }
             StartSend(data);
         }
         private void StartSend(SocketAsyncEventArgs data)
@@ -172,10 +182,10 @@ namespace IOCP_Server
             }
             Socket AccepteSocket = (Socket)data.UserToken;
             //response for request
-            byte[] senddata = Encoding.UTF8.GetBytes("Recive ok");
-            data.SetBuffer(senddata, 0, senddata.Length);
+            int copyNum=Encoding.UTF8.GetBytes("Recive ok",data.Buffer);
+            data.SetBuffer(data.Buffer,0, copyNum);
 #if !BENCHMARK
-            Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()}");
+            Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()} : {Encoding.UTF8.GetString(data.Buffer,0,copyNum)}");
 #endif
             if (!AccepteSocket.SendAsync(data))
             {
