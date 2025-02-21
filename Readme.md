@@ -14,6 +14,7 @@ Since it is disposable, you must either execute it using using or call dispose a
 
 ```C#
 using Server server = new Server(34543,30);
+server.Run();
 ```
 
 ## Environment
