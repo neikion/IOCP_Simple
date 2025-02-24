@@ -17,7 +17,7 @@ Server server = new Server(34543,30);
 server.Run();
 
 //shut down
-server.dispose();
+server.Dispose();
 ```
 
 ## Environment
