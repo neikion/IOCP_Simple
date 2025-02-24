@@ -10,11 +10,14 @@ Just run the Are Server class.
 ```C#
 Server(int port,int ConnectionSize);
 ```
-Since it is disposable, you must either execute it using using or call dispose afterward.
+This is disposable, so you need to call Dispose() when terminating
 
 ```C#
-using Server server = new Server(34543,30);
+Server server = new Server(34543,30);
 server.Run();
+
+//shut down
+server.dispose();
 ```
 
 ## Environment
