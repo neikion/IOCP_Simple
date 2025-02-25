@@ -20,17 +20,15 @@ namespace IOCP_Client
             connectSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             IPEndPoint remoteEP = new IPEndPoint(IPAddress.Loopback, 34543);
             socketEventArgs.RemoteEndPoint = remoteEP;
+            socketEventArgs.SetBuffer(new byte[4096],0,4096);
             socketEventArgs.Completed += ComplateIO;
         }
 
         public void Run()
         {
-            StartConnectOneSAEA(socketEventArgs);
-            /*
             Console.WriteLine("Client working... press any key to close Client");
+            StartConnectOneSAEA(socketEventArgs);
             Console.ReadKey();
-            */
-            Recycle(socketEventArgs);
         }
 
         private void StartConnectOneSAEA(SocketAsyncEventArgs e)
@@ -43,7 +41,6 @@ namespace IOCP_Client
 
         private void ComplateIO(object? sender, SocketAsyncEventArgs e)
         {
-            Console.WriteLine(e.SocketError);
             switch (e.LastOperation)
             {
                 case SocketAsyncOperation.Connect:
@@ -79,9 +76,10 @@ namespace IOCP_Client
                 return;
             }
             Socket ConnectSocket = (Socket)e.UserToken;
-            Console.WriteLine($"socket send to {(ConnectSocket.RemoteEndPoint as IPEndPoint)?.Address}");
-            byte[] data = Encoding.UTF8.GetBytes("test");
-            e.SetBuffer(data, 0, data.Length);
+            IPEndPoint? endPoint = (ConnectSocket.RemoteEndPoint as IPEndPoint);
+            Console.WriteLine($"socket send to {endPoint?.Address}:{endPoint?.Port}");
+            int copyNum = Encoding.UTF8.GetBytes("test",e.Buffer);
+            e.SetBuffer(e.Buffer, 0, copyNum);
             if (!ConnectSocket.SendAsync(e))
             {
                 EndSend(e);
@@ -101,10 +99,8 @@ namespace IOCP_Client
                 Recycle(e);
                 return;
             }
-            Console.WriteLine($"Start receive ");
             Socket ConnectSocket = (Socket)e.UserToken;
-            byte[] data = new byte[1024];
-            e.SetBuffer(data, 0, data.Length);
+            e.SetBuffer(e.Buffer, 0, e.Buffer.Length);
             if (!ConnectSocket.ReceiveAsync(e))
             {
                 EndReceive(e);
@@ -119,6 +115,7 @@ namespace IOCP_Client
                 return;
             }
             Console.WriteLine("recieve data : " + Encoding.UTF8.GetString(e.Buffer));
+            Recycle(e);
         }
         
 
