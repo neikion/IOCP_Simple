@@ -1,6 +1,4 @@
-﻿using System.Buffers;
-using System.Diagnostics;
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Text;
 
@@ -23,13 +21,19 @@ namespace IOCP_Server
         private SocketAsyncEventArgsPool _readWritePool;
 
         private int _connectionSize;
+        /*
+         * SemaphoreSlim은 일정 spin lock후 다른 Thread로 context switching함. 그러므로 금방 lock을 얻을 수 있는 경우 적합함.
+         * Semaphore는 OS 커널의 의해서 얻으므로 lock을 획득 시 많은 cpu clock이 소모되나 필요한 만큼만 대기함. 그러므로 오래 대기하는 경우 적합함.
+        */
         private Semaphore _acceptClients;
         private Socket _listenSocket;
         private bool disposedFlag=false;
+        private BufferMemoryPool _pool;
 
         public Server(int port,int ConnectionSize)
         {
             _connectionSize = ConnectionSize;
+            _pool = new BufferMemoryPool(4096, ConnectionSize);
             _port = port;
             _readWritePool = new SocketAsyncEventArgsPool(_connectionSize);
             _acceptClients = new Semaphore(_connectionSize, ConnectionSize);
@@ -39,7 +43,7 @@ namespace IOCP_Server
 
         public static void Main()
         {
-            using Server server = new Server(34543,30);
+            using Server server = new Server(34543,10000);
             server.Run();
             Console.WriteLine("server working... press any key to close server");
             Console.ReadKey();
@@ -52,7 +56,8 @@ namespace IOCP_Server
             {
                 socketEventArgs = new SocketAsyncEventArgs();
                 socketEventArgs.Completed += ComplateIO;
-                socketEventArgs.SetBuffer(new byte[4096], 0,4096);
+                _pool.Pop(out Memory<byte> block);
+                socketEventArgs.SetBuffer(block);
                 _readWritePool.Push(socketEventArgs);
             }
         }
@@ -145,7 +150,9 @@ namespace IOCP_Server
                 return;
             }
             Socket socket = (Socket)data.UserToken;
-            data.SetBuffer(data.Buffer, 0, data.Buffer.Length);
+            data.MemoryBuffer.Span.Fill(0);
+            //offset reset
+            data.SetBuffer(data.MemoryBuffer);
             if (!socket.ReceiveAsync(data))
             {
                 EndReceive(data);
@@ -153,19 +160,19 @@ namespace IOCP_Server
         }
         private void EndReceive(SocketAsyncEventArgs data)
         {
-            if (data.SocketError != SocketError.Success || data.Buffer==null)
+            if (data.SocketError != SocketError.Success || data.MemoryBuffer.IsEmpty)
             {
                 Recycle(data);
                 return;
             }
             if (data.BytesTransferred > 0)
             {
-            string reciveData = Encoding.UTF8.GetString(data.Buffer, 0, data.BytesTransferred);
+                string reciveData = Encoding.UTF8.GetString(data.MemoryBuffer.Span);
 #if !BENCHMARK
                 IPEndPoint? endPoint= (IPEndPoint?)((Socket)data.UserToken).RemoteEndPoint;
                 Console.WriteLine($"recive data from {endPoint?.Address.ToString()}:{endPoint?.Port}   :  {reciveData}");
-#endif
-                if (data.BytesTransferred == data.Buffer.Length)
+#endif   
+                if (data.BytesTransferred == data.MemoryBuffer.Length)
                 {
                     StartReceive(data);
                     return;
@@ -182,16 +189,17 @@ namespace IOCP_Server
             }
             Socket AccepteSocket = (Socket)data.UserToken;
             //response for request
-            int copyNum=Encoding.UTF8.GetBytes("Recive ok",data.Buffer);
-            data.SetBuffer(data.Buffer,0, copyNum);
+            int copyNum=Encoding.UTF8.GetBytes("Recive ok",data.MemoryBuffer.Span);
+            data.MemoryBuffer.Slice(copyNum, data.MemoryBuffer.Length-copyNum).Span.Fill(0);
+            data.SetBuffer(data.MemoryBuffer);
 #if !BENCHMARK
-            Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()} : {Encoding.UTF8.GetString(data.Buffer,0,copyNum)}");
+            Console.WriteLine($"send to {((IPEndPoint?)AccepteSocket.RemoteEndPoint)?.Address.ToString()} : {Encoding.UTF8.GetString(data.MemoryBuffer.Span)}");
 #endif
             if (!AccepteSocket.SendAsync(data))
             {
                 EndSend(data);
             }
-            
+
         }
         private void EndSend(SocketAsyncEventArgs data)
         {
